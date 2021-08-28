@@ -359,6 +359,9 @@ static int filter_nbthreads = 0;
 static int is_full_screen;
 static int64_t audio_callback_time;
 
+static int64_t buffering_start_time = 0;
+static int buffering_count = 0;
+
 #define FF_QUIT_EVENT    (SDL_USEREVENT + 2)
 
 static SDL_Window *window;
@@ -632,8 +635,12 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
         }
 
         do {
-            if (d->queue->nb_packets == 0)
+            if (d->queue->nb_packets == 0) {
+                buffering_count++;
+                buffering_start_time = av_gettime_relative();
+                av_log(NULL, AV_LOG_INFO, "buffering start, time:%" PRId64 " coung:%d \n", buffering_start_time, buffering_count);
                 SDL_CondSignal(d->empty_queue_cond);
+            }
             if (d->packet_pending) {
                 d->packet_pending = 0;
             } else {
@@ -3049,6 +3056,11 @@ static int read_thread(void *arg)
         } else if (pkt->stream_index == is->video_stream && pkt_in_play_range
                    && !(is->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC)) {
             packet_queue_put(&is->videoq, pkt);
+            if (is->videoq.nb_packets > 0 && buffering_start_time > 0) {
+                double cost = (av_gettime_relative() - buffering_start_time) / 1000000000.0;
+                buffering_start_time = 0;
+                av_log(NULL, AV_LOG_INFO, "buffering end, cost:%.3f s \n", cost);
+            }
         } else if (pkt->stream_index == is->subtitle_stream && pkt_in_play_range) {
             packet_queue_put(&is->subtitleq, pkt);
         } else {
@@ -3711,7 +3723,7 @@ int main(int argc, char **argv)
     }
 
     if (display_disable) {
-        video_disable = 1;
+        //video_disable = 1;
     }
     flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER;
     if (audio_disable)
