@@ -361,6 +361,7 @@ static int64_t audio_callback_time;
 
 static int64_t buffering_start_time = 0;
 static int buffering_count = 0;
+static int stuck_count = 0;
 
 #define FF_QUIT_EVENT    (SDL_USEREVENT + 2)
 
@@ -638,7 +639,7 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
             if (d->queue->nb_packets == 0) {
                 buffering_count++;
                 buffering_start_time = av_gettime_relative();
-                av_log(NULL, AV_LOG_INFO, "buffering start, time:%" PRId64 " coung:%d \n", buffering_start_time, buffering_count);
+                av_log(NULL, AV_LOG_INFO, "buffering start, time:%" PRId64 " buffering count:%d \n", buffering_start_time, buffering_count);
                 SDL_CondSignal(d->empty_queue_cond);
             }
             if (d->packet_pending) {
@@ -3057,9 +3058,13 @@ static int read_thread(void *arg)
                    && !(is->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC)) {
             packet_queue_put(&is->videoq, pkt);
             if (is->videoq.nb_packets > 0 && buffering_start_time > 0) {
-                double cost = (av_gettime_relative() - buffering_start_time) / 1000000000.0;
+                double cost = (av_gettime_relative() - buffering_start_time) / 1000000.0;
                 buffering_start_time = 0;
                 av_log(NULL, AV_LOG_INFO, "buffering end, cost:%.3f s \n", cost);
+                if (cost > 1) {
+                  stuck_count++;
+                  av_log(NULL, AV_LOG_WARNING, "stuck, duration:%.3f s, count:%d \n", cost, stuck_count);
+                }
             }
         } else if (pkt->stream_index == is->subtitle_stream && pkt_in_play_range) {
             packet_queue_put(&is->subtitleq, pkt);
@@ -3690,9 +3695,18 @@ void show_help_default(const char *opt, const char *arg)
            );
 }
 
+static void my_log_callback(void *ptr, int level, const char *fmt, va_list vl)
+{
+    if (av_log_get_level() >= level) {
+        vfprintf(stdout, fmt, vl);
+    }
+}
+
 /* Called from the main */
 int main(int argc, char **argv)
 {
+    // 设置日志回调，默认的日志输出无法通过'>' 重定向到文件
+    av_log_set_callback(my_log_callback);
     int flags;
     VideoState *is;
 
