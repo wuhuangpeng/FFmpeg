@@ -370,6 +370,10 @@ static SDL_Renderer *renderer;
 static SDL_RendererInfo renderer_info = {0};
 static SDL_AudioDeviceID audio_dev;
 
+static int64_t start_play_time = 0;
+static int64_t first_frame_time = 0;
+static int64_t first_display_time = 0;
+
 static const struct TextureFormatEntry {
     enum AVPixelFormat format;
     int texture_fmt;
@@ -1602,6 +1606,12 @@ retry:
         if (frame_queue_nb_remaining(&is->pictq) == 0) {
             // nothing to do, no picture to display in the queue
         } else {
+            if (first_display_time == 0) {
+                first_display_time = av_gettime_relative() - start_play_time;
+                double cost = first_display_time / 1000000.0;
+                av_log(NULL, AV_LOG_INFO, "first display cost %.3f s \n", cost);
+            }
+
             double last_duration, duration, delay;
             Frame *vp, *lastvp;
 
@@ -2805,6 +2815,12 @@ static int read_thread(void *arg)
         ret = -1;
         goto fail;
     }
+
+    if (first_frame_time == 0) {
+        double cost = (av_gettime_relative() - start_play_time) / 1000000.0;
+        av_log(NULL, AV_LOG_INFO, "open stream success, cost %.3f s \n", cost);
+    }
+    
     if (scan_all_pmts_set)
         av_dict_set(&format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE);
 
@@ -3044,6 +3060,13 @@ static int read_thread(void *arg)
         } else {
             is->eof = 0;
         }
+
+        if (first_frame_time == 0) {
+            first_frame_time = av_gettime_relative() - start_play_time;
+            double cost = first_frame_time / 1000000.0;
+            av_log(NULL, AV_LOG_INFO, "first frame cost %.3f s \n", cost);
+        }
+
         /* check if packet is in play range specified by user, then queue, otherwise discard */
         stream_start_time = ic->streams[pkt->stream_index]->start_time;
         pkt_ts = pkt->pts == AV_NOPTS_VALUE ? pkt->dts : pkt->pts;
@@ -3705,6 +3728,8 @@ static void my_log_callback(void *ptr, int level, const char *fmt, va_list vl)
 /* Called from the main */
 int main(int argc, char **argv)
 {
+    start_play_time = av_gettime_relative();
+
     // 设置日志回调，默认的日志输出无法通过'>' 重定向到文件
     av_log_set_callback(my_log_callback);
     int flags;
